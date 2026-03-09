@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AI 识别测试</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    canvas { border: 1px solid #ccc; margin: 10px 0; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    #result { margin-top: 20px; padding: 15px; background: #f0f0f0; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>🧪 智谱 AI 图像识别测试</h1>
+
+  <div>
+    <canvas id="testCanvas" width="500" height="400"></canvas>
+  </div>
+
+  <div>
+    <button onclick="drawSun()">画太阳 ⭕</button>
+    <button onclick="drawCircle()">画圆圈 🔴</button>
+    <button onclick="drawSquare()">画方块 🟦</button>
+    <button onclick="clearCanvas()">清空</button>
+    <button onclick="testAPI()" style="background: green; color: white;">提交 AI 识别 🤖</button>
+  </div>
+
+  <div id="result"></div>
+
+  <script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const resultDiv = document.getElementById('result');
+
+    // 初始化白色背景
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    function drawSun() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#FFFF00';
+      ctx.beginPath();
+      ctx.arc(250, 200, 80, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawCircle() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#FF0000';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(250, 200, 60, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawSquare() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#0000FF';
+      ctx.lineWidth = 5;
+      ctx.strokeRect(150, 100, 200, 200);
+    }
+
+    function clearCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    async function testAPI() {
+      const base64Image = canvas.toDataURL('image/png').split(',')[1];
+      resultDiv.innerHTML = '⏳ 正在识别中...';
+
+      try {
+        const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer 72e4a86c0a9148deac05665ca54e3e63.QiiToDrgOZoGULLO',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'cogview-3.5',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'image_url', image_url: { url: `data:image/png;base64,${base64Image}` } },
+                  {
+                    type: 'text',
+                    text: '请用简洁的中文描述这张手绘图的内容，只输出一个词语（如"太阳"、"苹果"、"房子"）。如果看不出来是什么，请说"看不清楚"。'
+                  }
+                ]
+              }
+            ],
+            max_tokens: 30
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(`API 错误：${response.status} - ${error.message || ''}`);
+        }
+
+        const data = await response.json();
+        const description = data.choices?.[0]?.message?.content?.trim() || '未知';
+
+        resultDiv.innerHTML = `
+          <h3>✨ AI 识别结果</h3>
+          <p style="font-size: 24px;"><strong>${description}</strong></p>
+          <p>模型：CogView 3.5</p>
+        `;
+
+      } catch (error) {
+        resultDiv.innerHTML = `<p style="color: red;">❌ 识别失败：${error.message}</p>`;
+      }
+    }
+  </script>
+</body>
+</html>
