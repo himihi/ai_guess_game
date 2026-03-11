@@ -184,7 +184,7 @@ onUnmounted(() => {
           <el-button
             type="primary"
             size="large"
-            :icon="gameStatus === 'playing' ? 'CircleClose' : 'VideoPlay'"
+            :icon="gameStatus === 'playing' ? 'VideoPause' : 'VideoPlay'"
             @click="gameStatus === 'playing' ? endGame() : startGame()"
             :disabled="gameStatus === 'ended'"
           >

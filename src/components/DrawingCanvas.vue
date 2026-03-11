@@ -166,7 +166,7 @@ onMounted(() => {
 
         <el-tooltip content="提交识别" placement="top">
           <el-button
-            icon="ZoomIn"
+            icon="Check"
             circle
             size="small"
             type="success"
@@ -174,7 +174,7 @@ onMounted(() => {
             :loading="props.isSubmitLoading"
             @click="emit('check')"
           />
-        </el-tooltip>
+        </tooltip>
       </div>
     </div>
   </div>
