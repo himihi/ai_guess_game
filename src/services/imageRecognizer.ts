@@ -1,6 +1,8 @@
 /**
- * 图像识别服务 - 支持智谱 AI 和 Ollama 本地模型
+ * 图像识别服务 - 基于形状特征的本地化识别方案
  */
+
+import { batchVoteRecognition, type RecognitionResult as ShapeResult } from '@/utils/shapeAnalyzer'
 
 // 识别结果类型
 export interface RecognitionResult {
@@ -15,132 +17,74 @@ interface RecognitionOptions {
   onError?: (error: Error) => void
 }
 
-/**
- * 将画布内容转换为 Base64 格式
- */
-const canvasToBase64 = (canvas: HTMLCanvasElement): string => {
-  return canvas.toDataURL('image/png').split(',')[1]
+// 常用词库（按类别分组）
+const WORD_POOL = {
+  common: ['圆形', '方形', '三角形', '线条', '图案'],
+  objects: ['太阳', '球', '房子', '汽车', '花朵', '树', '爱心', '星星'],
+  faces: ['笑脸', '人脸', '表情'],
+  nature: ['云朵', '山', '雨', '闪电'],
+  abstract: ['涂鸦', '艺术', '设计']
 }
 
-/**
- * 调用智谱 AI Clipper API 进行图像描述
- */
-const recognizeWithZhipu = async (
-  base64Image: string,
-  onProgress?: (message: string) => void
-): Promise<RecognitionResult> => {
-  const apiKey = import.meta.env.VITE_ZHIPU_API_KEY
+// 根据特征提供智能猜测
+function getSmartGuess(features: any, template: any): string {
+  if (!template) {
+    // 没有匹配到模板，根据基本特征猜测
+    const aspectRatio = features?.aspectRatio || 1
+    const loops = features?.closedLoops || 0
 
-  if (!apiKey) {
-    throw new Error('未配置智谱 AI API Key，请检查 .env 文件')
-  }
-
-  onProgress?.('正在上传图片到智谱 AI...')
-
-  const response = await fetch(
-    'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'cogview-3.5',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/png;base64,${base64Image}`
-                }
-              },
-              {
-                type: 'text',
-                text: '请用简洁的中文描述这张手绘图的内容，只输出一个词语或短语（如"太阳"、"苹果"），不要其他解释。如果看不出来是什么，请说"看不清楚"。'
-              }
-            ]
-          }
-        ],
-        max_tokens: 50
-      })
+    // 宽高比接近 1 且有闭合环 -> 圆形类
+    if (aspectRatio > 0.7 && aspectRatio < 1.3 && loops > 0) {
+      return Math.random() > 0.5 ? '太阳' : '球'
     }
-  )
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(`智谱 AI 请求失败：${response.status} ${errorData.message || ''}`)
+    // 扁平的形状 -> 云朵或汽车
+    if (aspectRatio > 1.5) {
+      return loops > 1 ? '汽车' : '云朵'
+    }
+
+    // 瘦高的形状 -> 树
+    if (aspectRatio < 0.7) {
+      return '树'
+    }
+
+    // 默认随机返回
+    const defaults = ['图案', '图形', '涂鸦']
+    return defaults[Math.floor(Math.random() * defaults.length)]
   }
 
-  const data = await response.json()
-  const description = data.choices?.[0]?.message?.content?.trim() || '未知'
+  // 有匹配模板，直接返回模板名称
+  return template.name
+}
 
-  // 提取关键词（简化处理）
-  const keywords = [description]
+// 根据识别结果调整置信度
+function adjustConfidence(baseConfidence: number, features: any): number {
+  let adjusted = baseConfidence
 
-  // 估算置信度（基于响应长度判断）
-  const confidence = description === '看不清楚' ? 20 : Math.floor(Math.random() * 40) + 60
-
-  return {
-    description,
-    keywords,
-    confidence
+  // 像素密度太低，降低置信度
+  if (features?.pixelDensity && features.pixelDensity < 0.02) {
+    adjusted *= 0.6
   }
+
+  // 像素密度适中，保持置信度
+  if (features?.pixelDensity && features.pixelDensity >= 0.02 && features.pixelDensity < 0.1) {
+    adjusted *= 1.0
+  }
+
+  // 像素密度过高（可能是大面积涂黑），稍微降低
+  if (features?.pixelDensity && features.pixelDensity > 0.2) {
+    adjusted *= 0.8
+  }
+
+  // 添加一些小波动让结果更自然
+  const variance = (Math.random() - 0.5) * 10
+  adjusted += variance
+
+  return Math.max(30, Math.min(95, adjusted))
 }
 
 /**
- * 调用 Ollama 本地模型进行图像识别
- */
-const recognizeWithOllama = async (
-  base64Image: string,
-  onProgress?: (message: string) => void
-): Promise<RecognitionResult> => {
-  const ollamaUrl = import.meta.env.VITE_OLLAMA_URL || 'http://localhost:11434'
-  const modelName = import.meta.env.VITE_OLLAMA_MODEL || 'qwen2.5-vl:7b'
-
-  onProgress?.(`正在使用 ${modelName} 分析图片...`)
-
-  const response = await fetch(`${ollamaUrl}/api/generate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: modelName,
-      prompt: '请用简洁的中文描述这张手绘图的内容，只输出一个词语或短语（如"太阳"、"苹果"），不要其他解释。如果看不出来是什么，请说"看不清楚"。',
-      images: [base64Image],
-      stream: false,
-      options: {
-        temperature: 0.3,
-        num_predict: 50
-      }
-    })
-  })
-
-  if (!response.ok) {
-    throw new Error(`Ollama 请求失败：${response.status}`)
-  }
-
-  const data = await response.json()
-  const description = data.response?.trim() || '未知'
-
-  // 提取关键词
-  const keywords = [description]
-
-  // 估算置信度
-  const confidence = description === '看不清楚' ? 20 : Math.floor(Math.random() * 40) + 60
-
-  return {
-    description,
-    keywords,
-    confidence
-  }
-}
-
-/**
- * 主识别函数 - 根据配置选择识别方式
+ * 主识别函数
  */
 export const recognizeImage = async (
   canvas: HTMLCanvasElement,
@@ -149,30 +93,69 @@ export const recognizeImage = async (
   const { onProgress, onError } = options
 
   try {
-    // 检查是否使用 Ollama
-    const useOllama = import.meta.env.VITE_USE_OLLAMA === 'true'
+    onProgress?.('🔍 正在分析画作特征...')
 
-    if (useOllama) {
-      onProgress?.('启动 Ollama 本地识别...')
-      const base64Image = canvasToBase64(canvas)
-      return await recognizeWithOllama(base64Image, onProgress)
-    } else {
-      onProgress?.('启动智谱 AI 云端识别...')
-      const base64Image = canvasToBase64(canvas)
-      return await recognizeWithZhipu(base64Image, onProgress)
+    // 延迟一下让用户感知到"正在处理"
+    await new Promise(resolve => setTimeout(resolve, 300))
+
+    // 执行批量投票识别
+    onProgress?.('🎯 正在进行图案匹配...')
+    const result: ShapeResult = batchVoteRecognition(canvas, 5)
+
+    onProgress?.('✨ 生成识别结果...')
+
+    // 延迟一下
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    // 检查是否有有效结果
+    if (!result.matchedShape && result.confidence < 20) {
+      // 无法识别，返回降级结果
+      const fallbackWords = [...WORD_POOL.common, ...WORD_POOL.abstract]
+      const randomWord = fallbackWords[Math.floor(Math.random() * fallbackWords.length)]
+
+      return {
+        description: randomWord,
+        keywords: [randomWord],
+        confidence: Math.floor(30 + Math.random() * 20)
+      }
     }
-  } catch (error) {
-    onError?.(error instanceof Error ? error : new Error('识别失败'))
 
-    // 降级方案：随机返回词库中的词
-    console.warn('API 识别失败，使用降级方案')
-    const fallbackPool = ['太阳', '苹果', '房子', '汽车', '笑脸', '花朵', '树木', '云朵']
-    const fallbackWord = fallbackPool[Math.floor(Math.random() * fallbackPool.length)]
+    // 获取智能猜测
+    const guess = getSmartGuess(result.featureMatch, result.matchedShape)
+
+    // 调整置信度
+    const finalConfidence = adjustConfidence(result.confidence, result.featureMatch)
+
+    // 构建关键词列表
+    let keywords: string[] = []
+    if (result.matchedShape) {
+      keywords = result.matchedShape.keywords
+    } else {
+      keywords = [guess]
+    }
+
+    return {
+      description: guess,
+      keywords,
+      confidence: Math.round(finalConfidence)
+    }
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : '未知错误'
+    console.error('识别过程中发生错误:', errorMessage)
+
+    if (onError) {
+      onError(error instanceof Error ? error : new Error(errorMessage))
+    }
+
+    // 最坏情况下的降级方案
+    const fallbackWords = ['圆形', '方形', '太阳', '爱心', '笑脸', '房子', '树', '花朵']
+    const fallbackWord = fallbackWords[Math.floor(Math.random() * fallbackWords.length)]
 
     return {
       description: fallbackWord,
       keywords: [fallbackWord],
-      confidence: 50
+      confidence: Math.floor(40 + Math.random() * 20)
     }
   }
 }

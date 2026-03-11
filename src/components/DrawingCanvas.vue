@@ -174,7 +174,7 @@ onMounted(() => {
             :loading="props.isSubmitLoading"
             @click="emit('check')"
           />
-        </tooltip>
+        </el-tooltip>
       </div>
     </div>
   </div>
